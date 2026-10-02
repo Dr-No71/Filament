@@ -342,7 +342,7 @@ def printer_pick(_=None):
         rr=c.execute("SELECT COALESCE(filamentplaetze,1) FROM drucker WHERE id=?",(r[0],)).fetchone()
     PV.get("filamentplaetze", tk.StringVar()).set(rr[0] if rr else 1)
     ensure_printer_slots(r[0],PV.get("filamentplaetze", tk.StringVar(value="1")).get())
-    refresh_slot_filament_choices(); slot_refresh()
+    refresh_slot_filament_choices(); slot_refresh(); refresh_color_boxes()
 
 
 def printer_save():
@@ -426,7 +426,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6.1"); root.geometry("1420x980"); root.minsize(1100,760); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -564,7 +564,7 @@ printer_search.trace_add("write",lambda *_: printer_refresh())
 pbox=tk.Frame(printer_page,bg=WHITE); pbox.pack(fill="both",expand=True,padx=8,pady=(0,8))
 pcols=("id","druckernummer","name","hersteller","modell","ip","standort","notizen","farben","status")
 pheads=["ID","Nr.","Druckername","Hersteller","Modell","IP-Adresse","Standort","Notizen","Farben geladen","Status"]
-printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings")
+printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings",height=6)
 for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
 printer_tree.column("id",width=0,stretch=False)
 for c,w in zip(pcols[1:],[60,125,105,115,120,115,135,220,95]): printer_tree.column(c,width=w)
@@ -579,7 +579,7 @@ printer_tree.bind("<<TreeviewSelect>>",printer_pick)
 # Filament-Slots pro Drucker
 slotbox=tk.LabelFrame(printer_page,text=" Filamentbelegung des ausgewählten Druckers ",bg=WHITE,fg=NAVY,
                       font=("Segoe UI",11,"bold"),padx=10,pady=8)
-slotbox.pack(fill="x",padx=12,pady=(0,8))
+slotbox.pack(fill="both",expand=True,padx=12,pady=(0,8))
 slot_no_var=tk.IntVar(value=1)
 slot_filament_var=tk.StringVar(value="— frei —")
 tk.Label(slotbox,text="Slot",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,sticky="w")
@@ -597,13 +597,17 @@ color_boxes_frame=tk.Frame(slotbox,bg=WHITE)
 color_boxes_frame.grid(row=2,column=1,columnspan=2,sticky="w",pady=(10,4))
 tk.Label(slotbox,textvariable=color_hint,bg=WHITE,fg=GREY,font=("Segoe UI",9)).grid(row=2,column=3,sticky="w",pady=(10,4))
 
-slot_tree=ttk.Treeview(slotbox,columns=slotcols,show="headings",height=5)
+slot_tree=ttk.Treeview(slotbox,columns=slotcols,show="headings",height=10)
 for c,t,w in [("slot","Slot",55),("hersteller","Hersteller",160),("farbe","Farbe",150),
               ("material","Material",100),("ausfuehrung","Ausführung",120),("status","Status",90)]:
     slot_tree.heading(c,text=t); slot_tree.column(c,width=w,anchor="center" if c in ("slot","status") else "w")
-slot_tree.grid(row=3,column=0,columnspan=4,sticky="ew",pady=(8,0))
+slot_tree.grid(row=3,column=0,columnspan=4,sticky="nsew",pady=(8,0))
+slot_scroll=ttk.Scrollbar(slotbox,orient="vertical",command=slot_tree.yview)
+slot_tree.configure(yscrollcommand=slot_scroll.set)
+slot_scroll.grid(row=3,column=4,sticky="ns",pady=(8,0))
 slot_tree.bind("<<TreeviewSelect>>",slot_select)
 slotbox.grid_columnconfigure(1,weight=1)
+slotbox.grid_rowconfigure(3,weight=1)
 
 clear(); refresh_lists(); refresh(); printer_clear(); refresh_printer_manufacturers(); printer_refresh(); refresh_slot_filament_choices(); refresh_color_boxes()
 root.after(1200,schedule_printer_check)
