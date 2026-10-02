@@ -547,7 +547,7 @@ printer_tree.bind("<<TreeviewSelect>>",printer_pick)
 
 
 # Filament-Slots pro Drucker
-slotbox=tk.LabelFrame(printer_tab,text=" Filamentbelegung des ausgewählten Druckers ",bg=WHITE,fg=NAVY,
+slotbox=tk.LabelFrame(printer_page,text=" Filamentbelegung des ausgewählten Druckers ",bg=WHITE,fg=NAVY,
                       font=("Segoe UI",11,"bold"),padx=10,pady=8)
 slotbox.pack(fill="x",padx=12,pady=(0,8))
 slot_no_var=tk.IntVar(value=1)
