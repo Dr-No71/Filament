@@ -558,7 +558,7 @@ tk.Label(slotbox,text="Filament aus Lager",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"
 slot_filament_box=ttk.Combobox(slotbox,textvariable=slot_filament_var,state="readonly",width=52)
 slot_filament_box.grid(row=1,column=1,padx=(0,10),sticky="w")
 tk.Button(slotbox,text="Filament zuordnen",command=slot_save,bg=NAVY,fg="white",font=("Segoe UI",9,"bold"),bd=0,padx=12,pady=7).grid(row=1,column=2,padx=4)
-tk.Button(slotbox,text="Slot leeren",command=slot_clear,bg=GRAY,fg="white",font=("Segoe UI",9,"bold"),bd=0,padx=12,pady=7).grid(row=1,column=3,padx=4)
+tk.Button(slotbox,text="Slot leeren",command=slot_clear,bg=GREY,fg="white",font=("Segoe UI",9,"bold"),bd=0,padx=12,pady=7).grid(row=1,column=3,padx=4)
 
 slotcols=("slot","hersteller","farbe","material","ausfuehrung","status")
 color_hint=tk.StringVar(value="")
