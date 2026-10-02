@@ -47,6 +47,15 @@ def init():
         if "filamentplaetze" not in drucker_cols:
             c.execute("ALTER TABLE drucker ADD COLUMN filamentplaetze INTEGER NOT NULL DEFAULT 1")
 
+        # V5.5 migration: slot table for variable filament positions per printer.
+        c.execute("""CREATE TABLE IF NOT EXISTS drucker_slots(
+          drucker_id INTEGER NOT NULL,
+          slot_nr INTEGER NOT NULL,
+          filament_id INTEGER,
+          PRIMARY KEY (drucker_id, slot_nr),
+          FOREIGN KEY (drucker_id) REFERENCES drucker(id) ON DELETE CASCADE,
+          FOREIGN KEY (filament_id) REFERENCES filamente(id) ON DELETE SET NULL)""")
+
         printer_cols={r[1] for r in c.execute("PRAGMA table_info(drucker)").fetchall()}
         if "hersteller" not in printer_cols:
             c.execute("ALTER TABLE drucker ADD COLUMN hersteller TEXT DEFAULT ''")
@@ -217,7 +226,7 @@ def refresh_slot_filament_choices():
 def printer_color_summary(pid):
     with con() as c:
         rows=c.execute("""SELECT COALESCE(f.farbe,'') FROM drucker_slots s
-                          LEFT JOIN filament f ON f.id=s.filament_id
+                          LEFT JOIN filamente f ON f.id=s.filament_id
                           WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
     vals=[r[0] for r in rows if r[0]]
     return " | ".join(vals)
@@ -231,7 +240,7 @@ def refresh_color_boxes():
         return
     with con() as c:
         rows=c.execute("""SELECT s.slot_nr,COALESCE(f.farbe,'') FROM drucker_slots s
-                          LEFT JOIN filament f ON f.id=s.filament_id
+                          LEFT JOIN filamente f ON f.id=s.filament_id
                           WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
     # Common German/English filament color names -> display color.
     cmap={"schwarz":"#111111","black":"#111111","weiß":"#FFFFFF","weiss":"#FFFFFF","white":"#FFFFFF",
@@ -264,7 +273,7 @@ def slot_refresh():
     if not pid: return
     with con() as c:
         rows=c.execute("""SELECT s.slot_nr,f.hersteller,f.farbe,f.material,f.ausfuehrung
-                          FROM drucker_slots s LEFT JOIN filament f ON f.id=s.filament_id
+                          FROM drucker_slots s LEFT JOIN filamente f ON f.id=s.filament_id
                           WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
     for r in rows:
         slot_tree.insert("", "end", values=(r[0],r[1] or "",r[2] or "",r[3] or "",r[4] or "",
