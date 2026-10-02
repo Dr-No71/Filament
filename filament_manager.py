@@ -42,6 +42,11 @@ def init():
           ip TEXT DEFAULT '',
           standort TEXT DEFAULT '',
           notizen TEXT DEFAULT '')""")
+        # Datenbank-Migration: ältere Versionen besitzen die Spalte noch nicht.
+        drucker_cols = {row[1] for row in c.execute("PRAGMA table_info(drucker)").fetchall()}
+        if "filamentplaetze" not in drucker_cols:
+            c.execute("ALTER TABLE drucker ADD COLUMN filamentplaetze INTEGER NOT NULL DEFAULT 1")
+
         printer_cols={r[1] for r in c.execute("PRAGMA table_info(drucker)").fetchall()}
         if "hersteller" not in printer_cols:
             c.execute("ALTER TABLE drucker ADD COLUMN hersteller TEXT DEFAULT ''")
