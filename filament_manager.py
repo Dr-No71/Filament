@@ -178,6 +178,14 @@ def printer_refresh():
         old=printer_status_cache.get(str(r[0]),("● Noch nicht geprüft","unknown"))
         printer_tree.insert("","end",values=r+(old[0],),tags=(old[1],))
 
+def refresh_printer_manufacturers():
+    if "printer_manufacturer_box" not in globals(): return
+    with con() as c:
+        vals=[r[0] for r in c.execute("""SELECT DISTINCT TRIM(hersteller) FROM drucker
+                                        WHERE TRIM(COALESCE(hersteller,''))<>''
+                                        ORDER BY hersteller COLLATE NOCASE""").fetchall()]
+    printer_manufacturer_box["values"]=vals
+
 def printer_clear():
     printer_selected.set("")
     for v in PV.values(): v.set("")
@@ -211,7 +219,7 @@ def printer_save():
                              VALUES(?,?,?,?,?,?,?)""",d)
     except Exception as e:
         messagebox.showerror("Drucker",f"Drucker konnte nicht gespeichert werden:\n{e}"); return
-    printer_clear(); printer_refresh()
+    printer_clear(); refresh_printer_manufacturers(); printer_refresh()
 
 def printer_delete():
     if not printer_selected.get():
@@ -220,7 +228,7 @@ def printer_delete():
         pid=str(printer_selected.get())
         with con() as c: c.execute("DELETE FROM drucker WHERE id=?",(pid,))
         printer_status_cache.pop(pid,None)
-        printer_clear(); printer_refresh()
+        printer_clear(); refresh_printer_manufacturers(); printer_refresh()
 
 def ping_ip(ip):
     ip=ip.strip()
@@ -267,7 +275,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.2"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.3"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -374,10 +382,17 @@ pcard.pack(fill="x",padx=8,pady=(8,0))
 tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=7,sticky="w",padx=14,pady=12)
 pfields=[("Druckernummer","druckernummer"),("Druckername","name"),("Hersteller","hersteller"),("Modell","modell"),
          ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
+pwidgets={}
 for i,(lab,k) in enumerate(pfields):
     tk.Label(pcard,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=1,column=i,sticky="w",padx=10)
-    ttk.Entry(pcard,textvariable=PV[k]).grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
+    if k=="hersteller":
+        w=ttk.Combobox(pcard,textvariable=PV[k])
+    else:
+        w=ttk.Entry(pcard,textvariable=PV[k])
+    w.grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
+    pwidgets[k]=w
     pcard.grid_columnconfigure(i,weight=1)
+printer_manufacturer_box=pwidgets["hersteller"]
 pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=7,sticky="w",padx=10,pady=(0,14))
 tk.Button(pbuttons,text="Drucker speichern",command=printer_save,bg=RED,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Neuer Drucker",command=printer_clear,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
@@ -406,7 +421,7 @@ pys=ttk.Scrollbar(pbox,orient="vertical",command=printer_tree.yview); printer_tr
 printer_tree.pack(side="left",fill="both",expand=True); pys.pack(side="right",fill="y")
 printer_tree.bind("<<TreeviewSelect>>",printer_pick)
 
-clear(); refresh_lists(); refresh(); printer_clear(); printer_refresh()
+clear(); refresh_lists(); refresh(); printer_clear(); refresh_printer_manufacturers(); printer_refresh()
 root.after(1200,schedule_printer_check)
 root.mainloop()
 
