@@ -20,10 +20,10 @@ jobs:
         run: python -m pip install --upgrade pyinstaller
 
       - name: Juno Filament Manager bauen
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name FilamentManager --icon assets/juno.ico --add-data "assets/juno_logo.png;assets" --add-data "assets/juno.ico;assets" filament_manager.py
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name FilamentManager --icon assets/juno.ico --add-data "assets/juno_logo.png;assets" --add-data "assets/juno.ico;assets" filament_manager.py
 
       - name: Windows EXE bereitstellen
         uses: actions/upload-artifact@v4
         with:
-          name: Juno-FilamentManager-V2-Windows
-          path: dist/FilamentManager.exe
+          name: Juno-FilamentManager-V3-Windows
+          path: dist/FilamentManager/
