@@ -244,13 +244,92 @@ def printer_color_summary(pid):
     return ""
 
 def filament_display_color(name):
-    cmap={"schwarz":"#111111","black":"#111111","weiß":"#FFFFFF","weiss":"#FFFFFF","white":"#FFFFFF",
-          "rot":"#E53935","red":"#E53935","blau":"#1E88E5","blue":"#1E88E5","grün":"#43A047","green":"#43A047",
-          "gelb":"#FDD835","yellow":"#FDD835","orange":"#FB8C00","grau":"#9E9E9E","grey":"#9E9E9E","gray":"#9E9E9E",
-          "silber":"#C0C0C0","silver":"#C0C0C0","gold":"#D4AF37","braun":"#795548","brown":"#795548",
-          "lila":"#8E24AA","violett":"#8E24AA","purple":"#8E24AA","pink":"#EC407A","rosa":"#EC407A",
-          "türkis":"#26A69A","turkis":"#26A69A","cyan":"#00ACC1","beige":"#D7CCC8"}
-    return cmap.get(str(name or "").strip().lower(),"#E5E7EB" if not name else "#BDBDBD")
+    """Filament-Farbnamen robust in Anzeigefarben umsetzen."""
+    raw = str(name or "").strip().lower()
+    if not raw:
+        return "#E5E7EB"
+
+    # Schreibweisen vereinheitlichen: Hellgrün == Hell Grün, dunkel-blau == Dunkel Blau.
+    text = raw.replace("-", " ").replace("_", " ")
+    text = " ".join(text.split())
+
+    # Häufige zusammengesetzte Farben zuerst prüfen.
+    special = {
+        "hell grün":"#81C784", "hellgrün":"#81C784",
+        "dunkel grün":"#1B5E20", "dunkelgrün":"#1B5E20",
+        "hell blau":"#64B5F6", "hellblau":"#64B5F6",
+        "dunkel blau":"#0D47A1", "dunkelblau":"#0D47A1",
+        "hell rot":"#EF9A9A", "hellrot":"#EF9A9A",
+        "dunkel rot":"#B71C1C", "dunkelrot":"#B71C1C",
+        "hell grau":"#D6D6D6", "hellgrau":"#D6D6D6",
+        "dunkel grau":"#616161", "dunkelgrau":"#616161",
+        "hell pink":"#F8BBD0", "hellpink":"#F8BBD0",
+        "dunkel pink":"#C2185B", "dunkelpink":"#C2185B",
+        "hell lila":"#CE93D8", "helllila":"#CE93D8",
+        "dunkel lila":"#6A1B9A", "dunkellila":"#6A1B9A",
+        "hell orange":"#FFCC80", "hellorange":"#FFCC80",
+        "dunkel orange":"#E65100", "dunkelorange":"#E65100",
+        "hell gelb":"#FFF59D", "hellgelb":"#FFF59D",
+        "dunkel gelb":"#F9A825", "dunkelgelb":"#F9A825",
+        "hell braun":"#BCAAA4", "hellbraun":"#BCAAA4",
+        "dunkel braun":"#4E342E", "dunkelbraun":"#4E342E",
+        "hell türkis":"#80CBC4", "helltürkis":"#80CBC4",
+        "dunkel türkis":"#00695C", "dunkeltürkis":"#00695C",
+    }
+    compact = text.replace(" ", "")
+    if text in special:
+        return special[text]
+    if compact in special:
+        return special[compact]
+
+    # Grundfarben. Zusätze wie "Silk", "Matt", "Metallic", "Neon" usw.
+    # stören die Erkennung nicht mehr.
+    bases = [
+        (("schwarz","black"), "#111111"),
+        (("weiß","weiss","white"), "#FFFFFF"),
+        (("grau","grey","gray"), "#9E9E9E"),
+        (("silber","silver"), "#C0C0C0"),
+        (("gold","golden"), "#D4AF37"),
+        (("rot","red"), "#E53935"),
+        (("blau","blue"), "#1E88E5"),
+        (("grün","gruen","green"), "#43A047"),
+        (("gelb","yellow"), "#FDD835"),
+        (("orange",), "#FB8C00"),
+        (("braun","brown"), "#795548"),
+        (("lila","violett","purple","violet"), "#8E24AA"),
+        (("pink","rosa"), "#EC407A"),
+        (("türkis","tuerkis","turkis","cyan"), "#26A69A"),
+        (("beige","creme","cream"), "#D7CCC8"),
+    ]
+
+    # Hell/Dunkel auch bei zusätzlichen Wörtern erkennen,
+    # z.B. "PLA Hell Grün Silk".
+    is_light = ("hell" in text) or ("light" in text)
+    is_dark = ("dunkel" in text) or ("dark" in text)
+
+    light_map = {
+        "#111111":"#757575", "#9E9E9E":"#D6D6D6", "#E53935":"#EF9A9A",
+        "#1E88E5":"#64B5F6", "#43A047":"#81C784", "#FDD835":"#FFF59D",
+        "#FB8C00":"#FFCC80", "#795548":"#BCAAA4", "#8E24AA":"#CE93D8",
+        "#EC407A":"#F8BBD0", "#26A69A":"#80CBC4"
+    }
+    dark_map = {
+        "#FFFFFF":"#BDBDBD", "#9E9E9E":"#616161", "#E53935":"#B71C1C",
+        "#1E88E5":"#0D47A1", "#43A047":"#1B5E20", "#FDD835":"#F9A825",
+        "#FB8C00":"#E65100", "#795548":"#4E342E", "#8E24AA":"#6A1B9A",
+        "#EC407A":"#C2185B", "#26A69A":"#00695C"
+    }
+
+    for names, base in bases:
+        if any(n in text or n in compact for n in names):
+            if is_light:
+                return light_map.get(base, base)
+            if is_dark:
+                return dark_map.get(base, base)
+            return base
+
+    # Nur wirklich unbekannte Farben bleiben neutral grau.
+    return "#BDBDBD"
 
 def refresh_overview_color_boxes():
     if "overview_color_boxes" not in globals(): return
@@ -490,7 +569,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6.4"); root.geometry("1420x980"); root.minsize(1100,760); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6.5"); root.geometry("1420x980"); root.minsize(1100,760); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
