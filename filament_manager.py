@@ -1,4 +1,4 @@
-import sqlite3, sys
+import sqlite3, sys, subprocess, threading
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
@@ -37,10 +37,14 @@ def init():
         c.execute("""CREATE TABLE IF NOT EXISTS drucker(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
+          hersteller TEXT DEFAULT '',
           modell TEXT DEFAULT '',
           ip TEXT DEFAULT '',
           standort TEXT DEFAULT '',
           notizen TEXT DEFAULT '')""")
+        printer_cols={r[1] for r in c.execute("PRAGMA table_info(drucker)").fetchall()}
+        if "hersteller" not in printer_cols:
+            c.execute("ALTER TABLE drucker ADD COLUMN hersteller TEXT DEFAULT ''")
 
 def num(s,label):
     try:
@@ -147,10 +151,12 @@ def printer_refresh():
     for i in printer_tree.get_children(): printer_tree.delete(i)
     q=printer_search.get().lower().strip()
     with con() as c:
-        rows=c.execute("SELECT id,name,modell,ip,standort,notizen FROM drucker ORDER BY name COLLATE NOCASE").fetchall()
+        rows=c.execute("""SELECT id,name,COALESCE(hersteller,''),modell,ip,standort,notizen
+                          FROM drucker ORDER BY name COLLATE NOCASE""").fetchall()
     for r in rows:
         if q and q not in " ".join(map(str,r[1:])).lower(): continue
-        printer_tree.insert("","end",values=r)
+        old=printer_status_cache.get(str(r[0]),("Noch nicht geprüft","unknown"))
+        printer_tree.insert("","end",values=r+(old[0],),tags=(old[1],))
 
 def printer_clear():
     printer_selected.set("")
@@ -161,30 +167,77 @@ def printer_pick(_=None):
     if not sel:return
     r=printer_tree.item(sel[0],"values")
     printer_selected.set(r[0])
-    for k,v in zip(["name","modell","ip","standort","notizen"],r[1:]): PV[k].set(v)
+    for k,v in zip(["name","hersteller","modell","ip","standort","notizen"],r[1:7]): PV[k].set(v)
 
 def printer_save():
     x={k:v.get().strip() for k,v in PV.items()}
     if not x["name"]:
-        messagebox.showwarning("Drucker","Bitte einen Druckernamen eingeben."); return
-    d=(x["name"],x["modell"],x["ip"],x["standort"],x["notizen"])
+        messagebox.showwarning("Drucker","Bitte einen Druckernamen / eine Nummer eingeben."); return
+    d=(x["name"],x["hersteller"],x["modell"],x["ip"],x["standort"],x["notizen"])
     with con() as c:
         if printer_selected.get():
-            c.execute("UPDATE drucker SET name=?,modell=?,ip=?,standort=?,notizen=? WHERE id=?",d+(printer_selected.get(),))
+            c.execute("""UPDATE drucker SET name=?,hersteller=?,modell=?,ip=?,standort=?,notizen=?
+                         WHERE id=?""",d+(printer_selected.get(),))
         else:
-            c.execute("INSERT INTO drucker(name,modell,ip,standort,notizen) VALUES(?,?,?,?,?)",d)
+            c.execute("""INSERT INTO drucker(name,hersteller,modell,ip,standort,notizen)
+                         VALUES(?,?,?,?,?,?)""",d)
     printer_clear(); printer_refresh()
 
 def printer_delete():
     if not printer_selected.get():
         messagebox.showinfo("Drucker","Bitte zuerst einen Drucker auswählen."); return
     if messagebox.askyesno("Drucker löschen","Ausgewählten Drucker wirklich löschen?"):
-        with con() as c: c.execute("DELETE FROM drucker WHERE id=?",(printer_selected.get(),))
+        pid=str(printer_selected.get())
+        with con() as c: c.execute("DELETE FROM drucker WHERE id=?",(pid,))
+        printer_status_cache.pop(pid,None)
         printer_clear(); printer_refresh()
+
+def ping_ip(ip):
+    ip=ip.strip()
+    if not ip: return ("Keine IP","unknown")
+    try:
+        flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
+        r=subprocess.run(["ping","-n","1","-w","900",ip],stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,creationflags=flags,timeout=2)
+        return ("Online","online") if r.returncode==0 else ("Offline","offline")
+    except Exception:
+        return ("Offline","offline")
+
+def check_printer_status():
+    if printer_checking.get(): return
+    printer_checking.set(True)
+    printer_status_text.set("Status wird geprüft …")
+    with con() as c:
+        rows=c.execute("SELECT id,ip FROM drucker").fetchall()
+    if not rows:
+        printer_checking.set(False); printer_status_text.set("Keine Drucker angelegt"); return
+
+    def worker():
+        results={}
+        # Each check runs in its own small worker so ~100 printers do not freeze the UI.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            jobs={ex.submit(ping_ip,str(ip or "")):str(pid) for pid,ip in rows}
+            for f in as_completed(jobs):
+                results[jobs[f]]=f.result()
+        def finish():
+            printer_status_cache.update(results)
+            printer_checking.set(False)
+            online=sum(1 for v in results.values() if v[1]=="online")
+            offline=sum(1 for v in results.values() if v[1]=="offline")
+            unknown=sum(1 for v in results.values() if v[1]=="unknown")
+            printer_status_text.set(f"{online} online   |   {offline} offline   |   {unknown} ohne IP")
+            printer_refresh()
+        root.after(0,finish)
+    threading.Thread(target=worker,daemon=True).start()
+
+def schedule_printer_check():
+    check_printer_status()
+    root.after(60000,schedule_printer_check)
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.1"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -280,37 +333,50 @@ tree.bind("<<TreeviewSelect>>",pick)
 
 
 printer_selected=tk.StringVar()
-PV={k:tk.StringVar() for k in ["name","modell","ip","standort","notizen"]}
+PV={k:tk.StringVar() for k in ["name","hersteller","modell","ip","standort","notizen"]}
+printer_status_cache={}
+printer_checking=tk.BooleanVar(value=False)
+printer_status_text=tk.StringVar(value="Noch nicht geprüft")
 printer_search=tk.StringVar()
 
 pcard=tk.Frame(printer_page,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1)
 pcard.pack(fill="x",padx=8,pady=(8,0))
-tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=5,sticky="w",padx=14,pady=12)
-pfields=[("Druckername / Nummer","name"),("Modell","modell"),("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
+tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=6,sticky="w",padx=14,pady=12)
+pfields=[("Druckername / Nummer","name"),("Hersteller","hersteller"),("Modell","modell"),
+         ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
 for i,(lab,k) in enumerate(pfields):
     tk.Label(pcard,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=1,column=i,sticky="w",padx=10)
     ttk.Entry(pcard,textvariable=PV[k]).grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
     pcard.grid_columnconfigure(i,weight=1)
-pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=5,sticky="w",padx=10,pady=(0,14))
+pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=6,sticky="w",padx=10,pady=(0,14))
 tk.Button(pbuttons,text="Drucker speichern",command=printer_save,bg=RED,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Neuer Drucker",command=printer_clear,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Drucker löschen",command=printer_delete,bg=GREY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+tk.Button(pbuttons,text="Status aktualisieren",command=check_printer_status,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+tk.Label(pbuttons,textvariable=printer_status_text,bg=WHITE,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left",padx=14)
 
 pbar=tk.Frame(printer_page,bg=CREAM); pbar.pack(fill="x",padx=8,pady=12)
 tk.Label(pbar,text="Drucker suchen",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left")
 ttk.Entry(pbar,textvariable=printer_search,width=32).pack(side="left",padx=8)
+tk.Label(pbar,text="Online-Status wird automatisch alle 60 Sekunden aktualisiert.",
+         bg=CREAM,fg=GREY,font=("Segoe UI",9)).pack(side="left",padx=12)
 printer_search.trace_add("write",lambda *_: printer_refresh())
 
 pbox=tk.Frame(printer_page,bg=WHITE); pbox.pack(fill="both",expand=True,padx=8,pady=(0,8))
-pcols=("id","name","modell","ip","standort","notizen")
-pheads=["ID","Druckername / Nummer","Modell","IP-Adresse","Standort","Notizen"]
+pcols=("id","name","hersteller","modell","ip","standort","notizen","status")
+pheads=["ID","Druckername / Nummer","Hersteller","Modell","IP-Adresse","Standort","Notizen","Status"]
 printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings")
 for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
 printer_tree.column("id",width=0,stretch=False)
-for c,w in zip(pcols[1:],[220,220,160,180,300]): printer_tree.column(c,width=w)
+for c,w in zip(pcols[1:],[180,130,160,145,150,220,100]): printer_tree.column(c,width=w)
+printer_tree.tag_configure("online",background="#D9F2DD")
+printer_tree.tag_configure("offline",background="#FFD0D0")
+printer_tree.tag_configure("unknown",background="#FFF2B2")
 pys=ttk.Scrollbar(pbox,orient="vertical",command=printer_tree.yview); printer_tree.configure(yscrollcommand=pys.set)
 printer_tree.pack(side="left",fill="both",expand=True); pys.pack(side="right",fill="y")
 printer_tree.bind("<<TreeviewSelect>>",printer_pick)
 
-clear(); refresh_lists(); refresh(); printer_clear(); printer_refresh(); root.mainloop()
+clear(); refresh_lists(); refresh(); printer_clear(); printer_refresh()
+root.after(1200,schedule_printer_check)
+root.mainloop()
 
