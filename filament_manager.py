@@ -236,7 +236,9 @@ def refresh_color_boxes():
           "lila":"#8E24AA","violett":"#8E24AA","purple":"#8E24AA","pink":"#EC407A","rosa":"#EC407A",
           "türkis":"#26A69A","turkis":"#26A69A","cyan":"#00ACC1","beige":"#D7CCC8"}
     byslot={int(n):f for n,f in rows}
-    count=min(10,max(1,int(PV["filamentplaetze"].get() or 1)))
+    with con() as c:
+        rr=c.execute("SELECT filamentplaetze FROM drucker WHERE id=?",(pid,)).fetchone()
+    count=min(10,max(1,int((rr[0] if rr else 1) or 1)))
     for n in range(1,count+1):
         farbe=byslot.get(n,"")
         bg=cmap.get(farbe.strip().lower(),"#E5E7EB" if not farbe else "#BDBDBD")
