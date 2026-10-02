@@ -1,4 +1,4 @@
-import sqlite3, sys, subprocess, threading
+import sqlite3, sys, subprocess, threading, os, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
@@ -10,7 +10,23 @@ def res(p):
     return Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))/p
 
 APP=Path(sys.executable).resolve().parent if getattr(sys,"frozen",False) else Path(__file__).resolve().parent
-DB=APP/"filamente.db"
+
+# Die Datenbank liegt dauerhaft im Windows-Benutzerprofil. Dadurch bleiben
+# Filamente, Drucker und Slot-Belegungen auch nach einem EXE-Update erhalten.
+if getattr(sys,"frozen",False) and sys.platform.startswith("win"):
+    DATA_DIR=Path(os.environ.get("LOCALAPPDATA", APP))/"JunoModellbau"
+else:
+    DATA_DIR=APP
+DATA_DIR.mkdir(parents=True,exist_ok=True)
+DB=DATA_DIR/"filamente.db"
+
+# Vorhandene Datenbank aus älteren Versionen einmalig übernehmen.
+LEGACY_DB=APP/"filamente.db"
+if DB != LEGACY_DB and not DB.exists() and LEGACY_DB.exists():
+    try:
+        shutil.copy2(LEGACY_DB,DB)
+    except Exception:
+        DB=LEGACY_DB
 MATS=["PLA","PLA+","PETG","ABS","ASA","TPU","PA / Nylon","PC","PVA","HIPS","PP","Sonstige"]
 VERS=["Standard","Matt","Metallic","Silk","Glitter","Transparent","Glow in the Dark","Carbon","Holz","Marmor","Dual Color","Tri Color","Sonstige"]
 
@@ -410,7 +426,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.5"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -515,7 +531,7 @@ printer_search=tk.StringVar()
 
 pcard=tk.Frame(printer_page,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1)
 pcard.pack(fill="x",padx=8,pady=(8,0))
-tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=7,sticky="w",padx=14,pady=12)
+tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=8,sticky="w",padx=14,pady=12)
 pfields=[("Druckernummer","druckernummer"),("Druckername","name"),("Hersteller","hersteller"),("Modell","modell"),
          ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen"),("Filamentplätze","filamentplaetze")]
 pwidgets={}
@@ -531,7 +547,7 @@ for i,(lab,k) in enumerate(pfields):
     pwidgets[k]=w
     pcard.grid_columnconfigure(i,weight=1)
 printer_manufacturer_box=pwidgets["hersteller"]
-pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=7,sticky="w",padx=10,pady=(0,14))
+pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=8,sticky="w",padx=10,pady=(0,14))
 tk.Button(pbuttons,text="Drucker speichern",command=printer_save,bg=RED,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Neuer Drucker",command=printer_clear,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Drucker löschen",command=printer_delete,bg=GREY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
