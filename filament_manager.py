@@ -45,6 +45,18 @@ def init():
         printer_cols={r[1] for r in c.execute("PRAGMA table_info(drucker)").fetchall()}
         if "hersteller" not in printer_cols:
             c.execute("ALTER TABLE drucker ADD COLUMN hersteller TEXT DEFAULT ''")
+        if "druckernummer" not in printer_cols:
+            c.execute("ALTER TABLE drucker ADD COLUMN druckernummer TEXT DEFAULT ''")
+        # Existing printers receive D001, D002 ... once; later numbers stay stable.
+        rows=c.execute("SELECT id,druckernummer FROM drucker ORDER BY id").fetchall()
+        used={str(r[1]).strip().upper() for r in rows if str(r[1] or "").strip()}
+        nxt=1
+        for pid,num in rows:
+            if str(num or "").strip(): continue
+            while f"D{nxt:03d}" in used: nxt+=1
+            dn=f"D{nxt:03d}"; used.add(dn)
+            c.execute("UPDATE drucker SET druckernummer=? WHERE id=?",(dn,pid))
+            nxt+=1
 
 def num(s,label):
     try:
@@ -146,41 +158,59 @@ def refresh(*_):
     warning_status.set("⚠ Kein Filamentbestand" if sums[0]==0 and not rows else (f"⚠ {all_low} Filamente nachbestellen" if all_low else "✓ Bestand ausreichend"))
 
 
+def next_printer_number():
+    with con() as c:
+        vals=[str(r[0] or "").strip().upper() for r in c.execute("SELECT druckernummer FROM drucker").fetchall()]
+    nums=[]
+    for v in vals:
+        if v.startswith("D") and v[1:].isdigit(): nums.append(int(v[1:]))
+    return f"D{(max(nums)+1 if nums else 1):03d}"
+
 def printer_refresh():
     if "printer_tree" not in globals(): return
     for i in printer_tree.get_children(): printer_tree.delete(i)
     q=printer_search.get().lower().strip()
     with con() as c:
-        rows=c.execute("""SELECT id,name,COALESCE(hersteller,''),modell,ip,standort,notizen
-                          FROM drucker ORDER BY name COLLATE NOCASE""").fetchall()
+        rows=c.execute("""SELECT id,COALESCE(druckernummer,''),name,COALESCE(hersteller,''),modell,ip,standort,notizen
+                          FROM drucker ORDER BY druckernummer COLLATE NOCASE,name COLLATE NOCASE""").fetchall()
     for r in rows:
         if q and q not in " ".join(map(str,r[1:])).lower(): continue
-        old=printer_status_cache.get(str(r[0]),("Noch nicht geprüft","unknown"))
+        old=printer_status_cache.get(str(r[0]),("● Noch nicht geprüft","unknown"))
         printer_tree.insert("","end",values=r+(old[0],),tags=(old[1],))
 
 def printer_clear():
     printer_selected.set("")
     for v in PV.values(): v.set("")
+    PV["druckernummer"].set(next_printer_number())
 
 def printer_pick(_=None):
     sel=printer_tree.selection()
     if not sel:return
     r=printer_tree.item(sel[0],"values")
     printer_selected.set(r[0])
-    for k,v in zip(["name","hersteller","modell","ip","standort","notizen"],r[1:7]): PV[k].set(v)
+    for k,v in zip(["druckernummer","name","hersteller","modell","ip","standort","notizen"],r[1:8]): PV[k].set(v)
 
 def printer_save():
     x={k:v.get().strip() for k,v in PV.items()}
     if not x["name"]:
-        messagebox.showwarning("Drucker","Bitte einen Druckernamen / eine Nummer eingeben."); return
-    d=(x["name"],x["hersteller"],x["modell"],x["ip"],x["standort"],x["notizen"])
-    with con() as c:
-        if printer_selected.get():
-            c.execute("""UPDATE drucker SET name=?,hersteller=?,modell=?,ip=?,standort=?,notizen=?
-                         WHERE id=?""",d+(printer_selected.get(),))
-        else:
-            c.execute("""INSERT INTO drucker(name,hersteller,modell,ip,standort,notizen)
-                         VALUES(?,?,?,?,?,?)""",d)
+        messagebox.showwarning("Drucker","Bitte einen Druckernamen eingeben."); return
+    if not x["druckernummer"]:
+        x["druckernummer"]=next_printer_number()
+    d=(x["druckernummer"].upper(),x["name"],x["hersteller"],x["modell"],x["ip"],x["standort"],x["notizen"])
+    try:
+        with con() as c:
+            exists=c.execute("SELECT id FROM drucker WHERE UPPER(TRIM(druckernummer))=? AND id<>?",
+                             (x["druckernummer"].upper(), int(printer_selected.get() or 0))).fetchone()
+            if exists:
+                messagebox.showwarning("Drucker","Diese Druckernummer ist bereits vergeben."); return
+            if printer_selected.get():
+                c.execute("""UPDATE drucker SET druckernummer=?,name=?,hersteller=?,modell=?,ip=?,standort=?,notizen=?
+                             WHERE id=?""",d+(printer_selected.get(),))
+            else:
+                c.execute("""INSERT INTO drucker(druckernummer,name,hersteller,modell,ip,standort,notizen)
+                             VALUES(?,?,?,?,?,?,?)""",d)
+    except Exception as e:
+        messagebox.showerror("Drucker",f"Drucker konnte nicht gespeichert werden:\n{e}"); return
     printer_clear(); printer_refresh()
 
 def printer_delete():
@@ -194,14 +224,14 @@ def printer_delete():
 
 def ping_ip(ip):
     ip=ip.strip()
-    if not ip: return ("Keine IP","unknown")
+    if not ip: return ("● Keine IP","unknown")
     try:
         flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
         r=subprocess.run(["ping","-n","1","-w","900",ip],stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL,creationflags=flags,timeout=2)
-        return ("Online","online") if r.returncode==0 else ("Offline","offline")
+        return ("● Online","online") if r.returncode==0 else ("● Offline","offline")
     except Exception:
-        return ("Offline","offline")
+        return ("● Offline","offline")
 
 def check_printer_status():
     if printer_checking.get(): return
@@ -237,7 +267,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.1"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.2"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -333,7 +363,7 @@ tree.bind("<<TreeviewSelect>>",pick)
 
 
 printer_selected=tk.StringVar()
-PV={k:tk.StringVar() for k in ["name","hersteller","modell","ip","standort","notizen"]}
+PV={k:tk.StringVar() for k in ["druckernummer","name","hersteller","modell","ip","standort","notizen"]}
 printer_status_cache={}
 printer_checking=tk.BooleanVar(value=False)
 printer_status_text=tk.StringVar(value="Noch nicht geprüft")
@@ -341,34 +371,34 @@ printer_search=tk.StringVar()
 
 pcard=tk.Frame(printer_page,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1)
 pcard.pack(fill="x",padx=8,pady=(8,0))
-tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=6,sticky="w",padx=14,pady=12)
-pfields=[("Druckername / Nummer","name"),("Hersteller","hersteller"),("Modell","modell"),
+tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=7,sticky="w",padx=14,pady=12)
+pfields=[("Druckernummer","druckernummer"),("Druckername","name"),("Hersteller","hersteller"),("Modell","modell"),
          ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
 for i,(lab,k) in enumerate(pfields):
     tk.Label(pcard,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=1,column=i,sticky="w",padx=10)
     ttk.Entry(pcard,textvariable=PV[k]).grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
     pcard.grid_columnconfigure(i,weight=1)
-pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=6,sticky="w",padx=10,pady=(0,14))
+pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=7,sticky="w",padx=10,pady=(0,14))
 tk.Button(pbuttons,text="Drucker speichern",command=printer_save,bg=RED,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Neuer Drucker",command=printer_clear,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Button(pbuttons,text="Drucker löschen",command=printer_delete,bg=GREY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
-tk.Button(pbuttons,text="Status aktualisieren",command=check_printer_status,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+tk.Button(pbuttons,text="Alle Drucker prüfen",command=check_printer_status,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
 tk.Label(pbuttons,textvariable=printer_status_text,bg=WHITE,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left",padx=14)
 
 pbar=tk.Frame(printer_page,bg=CREAM); pbar.pack(fill="x",padx=8,pady=12)
 tk.Label(pbar,text="Drucker suchen",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left")
 ttk.Entry(pbar,textvariable=printer_search,width=32).pack(side="left",padx=8)
-tk.Label(pbar,text="Online-Status wird automatisch alle 60 Sekunden aktualisiert.",
+tk.Label(pbar,text="Online-Status automatisch alle 60 Sekunden. Filament-Zuordnung folgt als nächster Ausbauschritt.",
          bg=CREAM,fg=GREY,font=("Segoe UI",9)).pack(side="left",padx=12)
 printer_search.trace_add("write",lambda *_: printer_refresh())
 
 pbox=tk.Frame(printer_page,bg=WHITE); pbox.pack(fill="both",expand=True,padx=8,pady=(0,8))
-pcols=("id","name","hersteller","modell","ip","standort","notizen","status")
-pheads=["ID","Druckername / Nummer","Hersteller","Modell","IP-Adresse","Standort","Notizen","Status"]
+pcols=("id","druckernummer","name","hersteller","modell","ip","standort","notizen","status")
+pheads=["ID","Nr.","Druckername","Hersteller","Modell","IP-Adresse","Standort","Notizen","Status"]
 printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings")
 for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
 printer_tree.column("id",width=0,stretch=False)
-for c,w in zip(pcols[1:],[180,130,160,145,150,220,100]): printer_tree.column(c,width=w)
+for c,w in zip(pcols[1:],[70,150,120,140,135,135,190,95]): printer_tree.column(c,width=w)
 printer_tree.tag_configure("online",background="#D9F2DD")
 printer_tree.tag_configure("offline",background="#FFD0D0")
 printer_tree.tag_configure("unknown",background="#FFF2B2")
