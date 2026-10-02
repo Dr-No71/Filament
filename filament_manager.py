@@ -240,12 +240,8 @@ def refresh_slot_filament_choices():
     slot_filament_box["values"]=vals
 
 def printer_color_summary(pid):
-    with con() as c:
-        rows=c.execute("""SELECT COALESCE(f.farbe,'') FROM drucker_slots s
-                          LEFT JOIN filamente f ON f.id=s.filament_id
-                          WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
-    vals=[r[0] for r in rows if r[0]]
-    return " | ".join(vals)
+    # Die Farbanzeige erfolgt als echte farbige Slot-Kästchen über der Treeview-Zelle.
+    return ""
 
 def filament_display_color(name):
     cmap={"schwarz":"#111111","black":"#111111","weiß":"#FFFFFF","weiss":"#FFFFFF","white":"#FFFFFF",
@@ -274,12 +270,32 @@ def refresh_overview_color_boxes():
         farbe=byslot.get(n,"")
         bg=filament_display_color(farbe)
         fg="#FFFFFF" if bg in ("#111111","#E53935","#1E88E5","#43A047","#795548","#8E24AA") else "#111111"
+        selected=(str(slot_no_var.get())==str(n)) if "slot_no_var" in globals() else False
         box=tk.Label(overview_color_boxes,text=str(n),bg=bg,fg=fg,width=3,height=1,
-                     relief="solid",bd=1,font=("Segoe UI",9,"bold"))
+                     relief="solid",bd=3 if selected else 1,font=("Segoe UI",9,"bold"),cursor="hand2")
         box.pack(side="left",padx=2)
+        box.bind("<Button-1>",lambda e,slot=n: choose_slot_from_box(slot))
         hint=f"Slot {n}: {farbe}" if farbe else f"Slot {n}: frei"
         box.bind("<Enter>",lambda e,t=hint: overview_color_hint.set(t))
         box.bind("<Leave>",lambda e: overview_color_hint.set(""))
+
+def choose_slot_from_box(n):
+    """Slot per Klick auf das Farbfeld auswählen."""
+    slot_no_var.set(str(n))
+    pid=int(printer_selected.get() or 0)
+    if not pid:
+        return
+    with con() as c:
+        r=c.execute("""SELECT f.hersteller,f.farbe,f.material,f.ausfuehrung
+                       FROM drucker_slots s
+                       LEFT JOIN filamente f ON f.id=s.filament_id
+                       WHERE s.drucker_id=? AND s.slot_nr=?""",(pid,n)).fetchone()
+    if r and r[0]:
+        slot_filament_var.set(f"{r[0]} | {r[1]} | {r[2]} | {r[3]}")
+    else:
+        slot_filament_var.set("— frei —")
+    refresh_color_boxes()
+    refresh_overview_color_boxes()
 
 def refresh_color_boxes():
     if "color_boxes_frame" not in globals(): return
@@ -306,10 +322,13 @@ def refresh_color_boxes():
     for n in range(1,count+1):
         farbe=byslot.get(n,"")
         bg=cmap.get(farbe.strip().lower(),"#E5E7EB" if not farbe else "#BDBDBD")
+        selected=(str(slot_no_var.get())==str(n))
         box=tk.Label(color_boxes_frame,text=str(n),bg=bg,
                      fg="#FFFFFF" if bg in ("#111111","#E53935","#1E88E5","#43A047","#795548","#8E24AA") else "#111111",
-                     width=3,height=1,relief="solid",bd=1,font=("Segoe UI",9,"bold"))
+                     width=3,height=1,relief="solid",bd=3 if selected else 1,
+                     font=("Segoe UI",9,"bold"),cursor="hand2")
         box.pack(side="left",padx=2)
+        box.bind("<Button-1>",lambda e,slot=n: choose_slot_from_box(slot))
         if farbe:
             try:
                 box.bind("<Enter>",lambda e,t=f"Slot {n}: {farbe}": color_hint.set(t))
@@ -344,27 +363,35 @@ def slot_save():
     if not printer_selected.get():
         messagebox.showinfo("Filament-Slots","Bitte zuerst einen Drucker auswählen.")
         return
-    n=int(slot_no_var.get() or 1)
+    if not str(slot_no_var.get()).strip():
+        messagebox.showinfo("Filament-Slots","Bitte zuerst einen Slot auswählen.")
+        return
+    n=int(slot_no_var.get())
     label=slot_filament_var.get()
     fid=slot_filament_map.get(label)
     with con() as c:
         c.execute("""INSERT INTO drucker_slots(drucker_id,slot_nr,filament_id) VALUES(?,?,?)
                      ON CONFLICT(drucker_id,slot_nr) DO UPDATE SET filament_id=excluded.filament_id""",
                   (int(printer_selected.get()),n,fid))
-    slot_refresh(); printer_refresh(); refresh_color_boxes(); refresh_overview_color_boxes()
+    slot_refresh(); printer_refresh(); refresh_color_boxes(); refresh_overview_color_boxes(); printer_tree.after_idle(draw_printer_tree_color_boxes)
 
 def slot_clear():
     if not printer_selected.get(): return
-    n=int(slot_no_var.get() or 1)
+    if not str(slot_no_var.get()).strip():
+        messagebox.showinfo("Filament-Slots","Bitte zuerst einen Slot auswählen.")
+        return
+    n=int(slot_no_var.get())
     with con() as c:
         c.execute("UPDATE drucker_slots SET filament_id=NULL WHERE drucker_id=? AND slot_nr=?",
                   (int(printer_selected.get()),n))
-    slot_filament_var.set("— frei —"); slot_refresh(); printer_refresh(); refresh_color_boxes(); refresh_overview_color_boxes()
+    slot_filament_var.set("— frei —"); slot_refresh(); printer_refresh(); refresh_color_boxes(); refresh_overview_color_boxes(); printer_tree.after_idle(draw_printer_tree_color_boxes); printer_tree.after_idle(draw_printer_tree_color_boxes)
 
 def printer_clear():
     printer_selected.set("")
     for v in PV.values(): v.set("")
     PV["druckernummer"].set(next_printer_number())
+    if "slot_no_var" in globals(): slot_no_var.set("")
+    if "slot_no_box" in globals(): slot_no_box["values"]=[]
 
 def printer_pick(_=None):
     sel=printer_tree.selection()
@@ -376,6 +403,9 @@ def printer_pick(_=None):
         rr=c.execute("SELECT COALESCE(filamentplaetze,1) FROM drucker WHERE id=?",(r[0],)).fetchone()
     PV.get("filamentplaetze", tk.StringVar()).set(rr[0] if rr else 1)
     ensure_printer_slots(r[0],PV.get("filamentplaetze", tk.StringVar(value="1")).get())
+    count=min(10,max(1,int(PV.get("filamentplaetze", tk.StringVar(value="1")).get() or 1)))
+    if "slot_no_box" in globals(): slot_no_box["values"]=[str(n) for n in range(1,count+1)]
+    slot_no_var.set("")
     refresh_slot_filament_choices(); slot_refresh(); refresh_color_boxes(); refresh_overview_color_boxes()
 
 
@@ -460,7 +490,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6.2"); root.geometry("1420x980"); root.minsize(1100,760); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.6.4"); root.geometry("1420x980"); root.minsize(1100,760); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -601,14 +631,69 @@ pheads=["ID","Nr.","Druckername","Hersteller","Modell","IP-Adresse","Standort","
 printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings",height=6)
 for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
 printer_tree.column("id",width=0,stretch=False)
-for c,w in zip(pcols[1:],[60,125,105,115,120,115,135,220,95]): printer_tree.column(c,width=w)
+for c,w in zip(pcols[1:],[60,125,105,115,120,115,135,260,95]): printer_tree.column(c,width=w)
 printer_tree.tag_configure("online",background="#D9F2DD")
 printer_tree.tag_configure("offline",background="#FFD0D0")
 printer_tree.tag_configure("unknown",background="#FFF2B2")
 pys=ttk.Scrollbar(pbox,orient="vertical",command=printer_tree.yview); printer_tree.configure(yscrollcommand=pys.set)
 printer_tree.pack(side="left",fill="both",expand=True); pys.pack(side="right",fill="y")
 printer_tree.bind("<<TreeviewSelect>>",printer_pick)
+printer_tree.bind("<Configure>",lambda e: printer_tree.after_idle(draw_printer_tree_color_boxes))
+printer_tree.bind("<MouseWheel>",lambda e: printer_tree.after(30,draw_printer_tree_color_boxes),add="+")
 
+
+# Farbige Slot-Kästchen direkt in der Spalte "Farben geladen"
+printer_color_widgets=[]
+
+def draw_printer_tree_color_boxes():
+    global printer_color_widgets
+    for w in printer_color_widgets:
+        try: w.destroy()
+        except: pass
+    printer_color_widgets=[]
+    try:
+        printer_tree.update_idletasks()
+        for item in printer_tree.get_children():
+            vals=printer_tree.item(item,"values")
+            if not vals: continue
+            pid=int(vals[0])
+            bbox=printer_tree.bbox(item,"farben")
+            if not bbox: continue
+            x,y,w,h=bbox
+            with con() as c:
+                rows=c.execute("""SELECT s.slot_nr,COALESCE(f.farbe,'')
+                                  FROM drucker_slots s
+                                  LEFT JOIN filamente f ON f.id=s.filament_id
+                                  WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
+                rr=c.execute("SELECT COALESCE(filamentplaetze,1) FROM drucker WHERE id=?",(pid,)).fetchone()
+            byslot={int(n):farbe for n,farbe in rows}
+            count=min(10,max(1,int((rr[0] if rr else 1) or 1)))
+            size=max(18,min(24,h-4))
+            gap=3
+            start=x+5
+            for n in range(1,count+1):
+                farbe=byslot.get(n,"")
+                bg=filament_display_color(farbe)
+                fg="#FFFFFF" if bg in ("#111111","#E53935","#1E88E5","#43A047","#795548","#8E24AA") else "#111111"
+                lab=tk.Label(printer_tree,text=str(n),bg=bg,fg=fg,bd=1,relief="solid",
+                             font=("Segoe UI",8,"bold"),cursor="hand2")
+                lab.place(x=start+(n-1)*(size+gap),y=y+2,width=size,height=max(16,h-4))
+                lab.bind("<Button-1>",lambda e,p=pid,slot=n: select_printer_slot_from_overview(p,slot))
+                printer_color_widgets.append(lab)
+    except Exception:
+        pass
+
+def select_printer_slot_from_overview(pid, slot):
+    # Passenden Drucker markieren und danach den geklickten Slot auswählen.
+    for item in printer_tree.get_children():
+        vals=printer_tree.item(item,"values")
+        if vals and int(vals[0])==int(pid):
+            printer_tree.selection_set(item)
+            printer_tree.focus(item)
+            printer_tree.see(item)
+            printer_pick()
+            choose_slot_from_box(slot)
+            break
 
 # Schnelle Farbübersicht für den aktuell markierten Drucker
 overview_colors=tk.Frame(printer_page,bg=CREAM)
@@ -627,10 +712,11 @@ tk.Label(overview_colors,textvariable=overview_color_hint,bg=CREAM,fg=GREY,
 slotbox=tk.LabelFrame(printer_page,text=" Filamentbelegung des ausgewählten Druckers ",bg=WHITE,fg=NAVY,
                       font=("Segoe UI",11,"bold"),padx=10,pady=8)
 slotbox.pack(fill="both",expand=True,padx=12,pady=(0,8))
-slot_no_var=tk.IntVar(value=1)
+slot_no_var=tk.StringVar(value="")
 slot_filament_var=tk.StringVar(value="— frei —")
 tk.Label(slotbox,text="Slot",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,sticky="w")
-tk.Spinbox(slotbox,from_=1,to=10,textvariable=slot_no_var,width=6).grid(row=1,column=0,padx=(0,10),sticky="w")
+slot_no_box=ttk.Combobox(slotbox,textvariable=slot_no_var,state="readonly",width=8,values=[])
+slot_no_box.grid(row=1,column=0,padx=(0,10),sticky="w")
 tk.Label(slotbox,text="Filament aus Lager",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=0,column=1,sticky="w")
 slot_filament_box=ttk.Combobox(slotbox,textvariable=slot_filament_var,state="readonly",width=52)
 slot_filament_box.grid(row=1,column=1,padx=(0,10),sticky="w")
@@ -658,5 +744,6 @@ slotbox.grid_rowconfigure(3,weight=1)
 
 clear(); refresh_lists(); refresh(); printer_clear(); refresh_printer_manufacturers(); printer_refresh(); refresh_slot_filament_choices(); refresh_color_boxes(); refresh_overview_color_boxes()
 root.after(1200,schedule_printer_check)
+root.after(150,draw_printer_tree_color_boxes)
 root.mainloop()
 
