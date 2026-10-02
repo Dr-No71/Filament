@@ -1,209 +1,140 @@
-import sqlite3
+import sqlite3, sys
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
-from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
-DB = APP_DIR / "filamente.db"
+NAVY="#07345D"; RED="#BE1E2D"; CREAM="#F7F4F0"; WHITE="#FFFFFF"; TEXT="#1F2933"
 
-AUSFUEHRUNGEN = [
-    "Standard", "Matt", "Metallic", "Silk", "Glitter", "Transparent",
-    "Glow in the Dark", "Carbon", "Holz", "Marmor", "Sonstige"
-]
+def res(p):
+    return Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))/p
 
-def db():
-    return sqlite3.connect(DB)
+APP=Path(sys.executable).resolve().parent if getattr(sys,"frozen",False) else Path(__file__).resolve().parent
+DB=APP/"filamente.db"
+MATS=["PLA","PLA+","PETG","ABS","ASA","TPU","PA / Nylon","PC","PVA","HIPS","PP","Sonstige"]
+VERS=["Standard","Matt","Metallic","Silk","Glitter","Transparent","Glow in the Dark","Carbon","Holz","Marmor","Dual Color","Tri Color","Sonstige"]
 
-def init_db():
-    with db() as con:
-        con.execute("""
-        CREATE TABLE IF NOT EXISTS filamente (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hersteller TEXT NOT NULL,
-            farbe TEXT NOT NULL,
-            material TEXT NOT NULL,
-            ausfuehrung TEXT NOT NULL,
-            rollen INTEGER NOT NULL DEFAULT 1,
-            gewicht REAL NOT NULL DEFAULT 1000,
-            restgewicht REAL NOT NULL DEFAULT 1000,
-            preis REAL NOT NULL DEFAULT 0,
-            lagerplatz TEXT DEFAULT '',
-            notizen TEXT DEFAULT ''
-        )
-        """)
+def con(): return sqlite3.connect(DB)
+def init():
+    with con() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS filamente(id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hersteller TEXT NOT NULL,farbe TEXT NOT NULL,material TEXT NOT NULL,ausfuehrung TEXT NOT NULL,
+        rollen INTEGER NOT NULL DEFAULT 1,gewicht REAL NOT NULL DEFAULT 1000,restgewicht REAL NOT NULL DEFAULT 1000,
+        preis REAL NOT NULL DEFAULT 0,lagerplatz TEXT DEFAULT '',notizen TEXT DEFAULT '')""")
 
-def refresh():
-    for x in tree.get_children():
-        tree.delete(x)
-    term = search_var.get().strip().lower()
-    with db() as con:
-        rows = con.execute("""
-            SELECT id, hersteller, farbe, material, ausfuehrung, rollen,
-                   gewicht, restgewicht, preis, lagerplatz, notizen
-            FROM filamente
-            ORDER BY hersteller, material, ausfuehrung, farbe
-        """).fetchall()
-    for row in rows:
-        if term and term not in " ".join(map(str, row[1:])).lower():
-            continue
-        tree.insert("", "end", values=row)
-    update_total()
-
-def update_total():
-    with db() as con:
-        total = con.execute("SELECT COALESCE(SUM(rollen),0) FROM filamente").fetchone()[0]
-        total_weight = con.execute("SELECT COALESCE(SUM(restgewicht),0) FROM filamente").fetchone()[0]
-    total_var.set(f"Bestand: {total} Rollen | Restgewicht: {total_weight:.0f} g")
-
-def clear_form():
-    selected_id.set("")
-    vars_["hersteller"].set("")
-    vars_["farbe"].set("")
-    vars_["material"].set("")
-    vars_["ausfuehrung"].set("Standard")
-    vars_["rollen"].set("1")
-    vars_["gewicht"].set("1000")
-    vars_["restgewicht"].set("1000")
-    vars_["preis"].set("0")
-    vars_["lagerplatz"].set("")
-    vars_["notizen"].set("")
-    hersteller.focus()
-
-def num(value, name, minimum=0):
+def number(s,name):
     try:
-        n = float(value.replace(",", "."))
-        if n < minimum:
-            raise ValueError
+        n=float(s.replace(",","."))
+        if n<0: raise ValueError
         return n
-    except ValueError:
-        raise ValueError(f"{name} muss eine gültige Zahl sein.")
+    except: raise ValueError(name+" muss eine gültige Zahl sein.")
+
+def clear():
+    selected.set("")
+    defaults={"hersteller":"","farbe":"","material":"PLA","ausfuehrung":"Standard","rollen":"1",
+              "gewicht":"1000","restgewicht":"1000","preis":"0","lagerplatz":"","notizen":""}
+    for k,v in defaults.items(): V[k].set(v)
 
 def save():
-    h = vars_["hersteller"].get().strip()
-    f = vars_["farbe"].get().strip()
-    m = vars_["material"].get().strip()
-    a = vars_["ausfuehrung"].get().strip()
-    lager = vars_["lagerplatz"].get().strip()
-    notizen = vars_["notizen"].get().strip()
-    if not all([h, f, m, a]):
-        messagebox.showwarning("Fehlende Angaben", "Hersteller, Farbe, Material und Ausführung sind Pflichtfelder.")
-        return
+    x={k:v.get().strip() for k,v in V.items()}
+    if not all(x[k] for k in ("hersteller","farbe","material","ausfuehrung")):
+        messagebox.showwarning("Fehlende Angaben","Bitte Hersteller, Farbe, Material und Ausführung ausfüllen."); return
     try:
-        rollen = int(vars_["rollen"].get())
-        if rollen < 0: raise ValueError
-        gewicht = num(vars_["gewicht"].get(), "Gewicht")
-        rest = num(vars_["restgewicht"].get(), "Restgewicht")
-        preis = num(vars_["preis"].get(), "Preis")
-    except ValueError as e:
-        messagebox.showerror("Ungültige Eingabe", str(e))
-        return
-
-    with db() as con:
-        if selected_id.get():
-            con.execute("""UPDATE filamente SET hersteller=?, farbe=?, material=?,
-                ausfuehrung=?, rollen=?, gewicht=?, restgewicht=?, preis=?,
-                lagerplatz=?, notizen=? WHERE id=?""",
-                (h,f,m,a,rollen,gewicht,rest,preis,lager,notizen,selected_id.get()))
+        rollen=int(x["rollen"]); gewicht=number(x["gewicht"],"Gewicht"); rest=number(x["restgewicht"],"Restgewicht"); preis=number(x["preis"],"Preis")
+        if rollen<0: raise ValueError("Rollen muss eine positive Zahl sein.")
+    except ValueError as e: messagebox.showerror("Eingabe prüfen",str(e)); return
+    d=(x["hersteller"],x["farbe"],x["material"],x["ausfuehrung"],rollen,gewicht,rest,preis,x["lagerplatz"],x["notizen"])
+    with con() as c:
+        if selected.get():
+            c.execute("""UPDATE filamente SET hersteller=?,farbe=?,material=?,ausfuehrung=?,rollen=?,gewicht=?,
+            restgewicht=?,preis=?,lagerplatz=?,notizen=? WHERE id=?""",d+(selected.get(),))
         else:
-            con.execute("""INSERT INTO filamente
-                (hersteller,farbe,material,ausfuehrung,rollen,gewicht,restgewicht,preis,lagerplatz,notizen)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (h,f,m,a,rollen,gewicht,rest,preis,lager,notizen))
-    refresh()
-    clear_form()
-
-def select_row(_=None):
-    sel = tree.selection()
-    if not sel: return
-    v = tree.item(sel[0], "values")
-    selected_id.set(v[0])
-    keys = ["hersteller","farbe","material","ausfuehrung","rollen","gewicht","restgewicht","preis","lagerplatz","notizen"]
-    for k, val in zip(keys, v[1:]):
-        vars_[k].set(val)
+            c.execute("""INSERT INTO filamente(hersteller,farbe,material,ausfuehrung,rollen,gewicht,restgewicht,preis,lagerplatz,notizen)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",d)
+    clear(); refresh()
 
 def delete():
-    sel = tree.selection()
-    if not sel:
-        messagebox.showinfo("Auswahl", "Bitte zuerst ein Filament auswählen.")
-        return
-    v = tree.item(sel[0], "values")
-    if messagebox.askyesno("Löschen", f"{v[1]} – {v[2]} wirklich löschen?"):
-        with db() as con:
-            con.execute("DELETE FROM filamente WHERE id=?", (v[0],))
-        refresh()
-        clear_form()
+    if not selected.get(): messagebox.showinfo("Auswahl","Bitte zuerst ein Filament auswählen."); return
+    if messagebox.askyesno("Löschen","Ausgewähltes Filament wirklich löschen?"):
+        with con() as c: c.execute("DELETE FROM filamente WHERE id=?",(selected.get(),))
+        clear(); refresh()
 
-init_db()
-root = tk.Tk()
-root.title("Filament Manager")
-root.geometry("1250x720")
-root.minsize(1000, 600)
+def pick(_=None):
+    s=tree.selection()
+    if not s:return
+    r=tree.item(s[0],"values"); selected.set(r[0])
+    for k,v in zip(["hersteller","farbe","material","ausfuehrung","rollen","gewicht","restgewicht","preis","lagerplatz","notizen"],r[1:]): V[k].set(v)
 
-selected_id = tk.StringVar()
-vars_ = {k: tk.StringVar() for k in [
-    "hersteller","farbe","material","ausfuehrung","rollen","gewicht",
-    "restgewicht","preis","lagerplatz","notizen"
-]}
-vars_["ausfuehrung"].set("Standard")
-vars_["rollen"].set("1")
-vars_["gewicht"].set("1000")
-vars_["restgewicht"].set("1000")
-vars_["preis"].set("0")
-search_var = tk.StringVar()
-total_var = tk.StringVar()
+def refresh(*_):
+    for i in tree.get_children(): tree.delete(i)
+    q=search.get().lower().strip()
+    with con() as c:
+        rows=c.execute("SELECT id,hersteller,farbe,material,ausfuehrung,rollen,gewicht,restgewicht,preis,lagerplatz,notizen FROM filamente ORDER BY hersteller,material,farbe").fetchall()
+    for r in rows:
+        if q and q not in " ".join(map(str,r[1:])).lower(): continue
+        if fmat.get()!="Alle" and r[3]!=fmat.get(): continue
+        if fver.get()!="Alle" and r[4]!=fver.get(): continue
+        tree.insert("","end",values=r)
+    with con() as c:
+        rolls=c.execute("SELECT COALESCE(SUM(rollen),0) FROM filamente").fetchone()[0]
+        grams=c.execute("SELECT COALESCE(SUM(restgewicht),0) FROM filamente").fetchone()[0]
+    status.set(f"{rolls} Rollen im Bestand   •   {grams:.0f} g Restgewicht")
 
-top = ttk.Frame(root, padding=12)
-top.pack(fill="x")
-ttk.Label(top, text="Filament Manager", font=("Segoe UI", 20, "bold")).pack(side="left")
-ttk.Label(top, textvariable=total_var, font=("Segoe UI", 11)).pack(side="right")
+init()
+root=tk.Tk(); root.title("Juno modellbau – Filamentverwaltung"); root.geometry("1320x780"); root.minsize(1050,650); root.configure(bg=CREAM)
+try: root.iconbitmap(res("assets/juno.ico"))
+except: pass
+style=ttk.Style()
+try: style.theme_use("clam")
+except: pass
+style.configure("Treeview",rowheight=30,font=("Segoe UI",10),background=WHITE,fieldbackground=WHITE)
+style.configure("Treeview.Heading",font=("Segoe UI",10,"bold"),foreground=NAVY)
+style.map("Treeview",background=[("selected",NAVY)],foreground=[("selected",WHITE)])
 
-form = ttk.LabelFrame(root, text="Filamentdaten", padding=10)
-form.pack(fill="x", padx=12, pady=(0,10))
+selected=tk.StringVar(); V={k:tk.StringVar() for k in ["hersteller","farbe","material","ausfuehrung","rollen","gewicht","restgewicht","preis","lagerplatz","notizen"]}
+search=tk.StringVar(); fmat=tk.StringVar(value="Alle"); fver=tk.StringVar(value="Alle"); status=tk.StringVar(); clear()
 
-fields = [
-    ("Hersteller","hersteller",22),("Farbe","farbe",18),("Material","material",16),
-    ("Ausführung","ausfuehrung",18),("Rollen","rollen",8),("Gewicht/Rolle (g)","gewicht",12),
-    ("Restgewicht gesamt (g)","restgewicht",14),("Preis/Rolle (€)","preis",12),
-    ("Lagerplatz","lagerplatz",14),("Notizen","notizen",24)
-]
-for i,(label,key,width) in enumerate(fields):
-    r = 0 if i < 5 else 2
-    c = i if i < 5 else i-5
-    ttk.Label(form,text=label).grid(row=r,column=c,sticky="w",padx=4,pady=(0,3))
-    if key == "ausfuehrung":
-        w=ttk.Combobox(form,textvariable=vars_[key],values=AUSFUEHRUNGEN,width=width)
-    elif key=="rollen":
-        w=ttk.Spinbox(form,from_=0,to=9999,textvariable=vars_[key],width=width)
-    else:
-        w=ttk.Entry(form,textvariable=vars_[key],width=width)
-    w.grid(row=r+1,column=c,sticky="ew",padx=4,pady=(0,8))
-    if key=="hersteller": hersteller=w
+header=tk.Frame(root,bg=WHITE,height=115); header.pack(fill="x"); header.pack_propagate(False)
+try:
+    logo=tk.PhotoImage(file=res("assets/juno_logo.png")); tk.Label(header,image=logo,bg=WHITE).pack(side="left",padx=20,pady=8)
+except: pass
+tb=tk.Frame(header,bg=WHITE); tb.pack(side="left")
+tk.Label(tb,text="FILAMENTVERWALTUNG",bg=WHITE,fg=NAVY,font=("Segoe UI",22,"bold")).pack(anchor="w")
+tk.Label(tb,text="Juno modellbau",bg=WHITE,fg=RED,font=("Segoe UI",11,"bold")).pack(anchor="w")
+tk.Label(header,textvariable=status,bg=WHITE,fg=NAVY,font=("Segoe UI",11,"bold")).pack(side="right",padx=25)
 
-actions=ttk.Frame(form)
-actions.grid(row=4,column=0,columnspan=5,sticky="w")
-ttk.Button(actions,text="Speichern / Aktualisieren",command=save).pack(side="left",padx=4)
-ttk.Button(actions,text="Neues Filament",command=clear_form).pack(side="left",padx=4)
-ttk.Button(actions,text="Ausgewähltes löschen",command=delete).pack(side="left",padx=4)
+main=tk.Frame(root,bg=CREAM); main.pack(fill="both",expand=True,padx=22,pady=16)
+card=tk.Frame(main,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1); card.pack(fill="x")
+tk.Label(card,text="Filament erfassen / bearbeiten",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=5,sticky="w",padx=14,pady=12)
+fields=[("Hersteller","hersteller"),("Farbe","farbe"),("Material","material"),("Ausführung","ausfuehrung"),("Anzahl Rollen","rollen"),
+("Gewicht / Rolle (g)","gewicht"),("Restgewicht gesamt (g)","restgewicht"),("Preis / Rolle (€)","preis"),("Lagerplatz","lagerplatz"),("Notizen","notizen")]
+for i,(lab,k) in enumerate(fields):
+    rr=1+(i//5)*2; cc=i%5
+    tk.Label(card,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=rr,column=cc,sticky="w",padx=10)
+    if k=="material": w=ttk.Combobox(card,textvariable=V[k],values=MATS,state="readonly")
+    elif k=="ausfuehrung": w=ttk.Combobox(card,textvariable=V[k],values=VERS,state="readonly")
+    elif k=="rollen": w=ttk.Spinbox(card,from_=0,to=9999,textvariable=V[k])
+    else: w=ttk.Entry(card,textvariable=V[k])
+    w.grid(row=rr+1,column=cc,sticky="ew",padx=10,pady=(2,10),ipady=3)
+for c in range(5): card.grid_columnconfigure(c,weight=1)
 
-search=ttk.Frame(root,padding=(12,0,12,8))
-search.pack(fill="x")
-ttk.Label(search,text="Suche:").pack(side="left")
-ttk.Entry(search,textvariable=search_var,width=45).pack(side="left",padx=8)
-search_var.trace_add("write",lambda *_: refresh())
+btn=tk.Frame(card,bg=WHITE); btn.grid(row=5,column=0,columnspan=5,sticky="w",padx=10,pady=(0,14))
+def B(t,cmd,color):
+    return tk.Button(btn,text=t,command=cmd,bg=color,fg=WHITE,activebackground=color,activeforeground=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=16,pady=8)
+B("Speichern",save,RED).pack(side="left",padx=4); B("Neues Filament",clear,NAVY).pack(side="left",padx=4); B("Ausgewähltes löschen",delete,"#6B7280").pack(side="left",padx=4)
 
-frame=ttk.Frame(root,padding=(12,0,12,12))
-frame.pack(fill="both",expand=True)
+bar=tk.Frame(main,bg=CREAM); bar.pack(fill="x",pady=12)
+tk.Label(bar,text="Suche",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left"); ttk.Entry(bar,textvariable=search,width=32).pack(side="left",padx=8)
+tk.Label(bar,text="Material",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left",padx=(15,0)); ttk.Combobox(bar,textvariable=fmat,values=["Alle"]+MATS,state="readonly",width=15).pack(side="left",padx=8)
+tk.Label(bar,text="Ausführung",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left",padx=(15,0)); ttk.Combobox(bar,textvariable=fver,values=["Alle"]+VERS,state="readonly",width=17).pack(side="left",padx=8)
+search.trace_add("write",refresh); fmat.trace_add("write",refresh); fver.trace_add("write",refresh)
+
+tc=tk.Frame(main,bg=WHITE); tc.pack(fill="both",expand=True)
 cols=("id","hersteller","farbe","material","ausfuehrung","rollen","gewicht","restgewicht","preis","lagerplatz","notizen")
-tree=ttk.Treeview(frame,columns=cols,show="headings",selectmode="browse")
-heads=["ID","Hersteller","Farbe","Material","Ausführung","Rollen","Gewicht/Rolle","Restgewicht","Preis/Rolle","Lagerplatz","Notizen"]
-widths=[45,150,120,100,130,65,100,100,95,100,180]
-for c,h,w in zip(cols,heads,widths):
-    tree.heading(c,text=h); tree.column(c,width=w,anchor="center" if c in ("id","rollen") else "w")
-ys=ttk.Scrollbar(frame,orient="vertical",command=tree.yview)
-tree.configure(yscrollcommand=ys.set)
-tree.pack(side="left",fill="both",expand=True); ys.pack(side="right",fill="y")
-tree.bind("<<TreeviewSelect>>",select_row)
-
-refresh()
-hersteller.focus()
-root.mainloop()
+tree=ttk.Treeview(tc,columns=cols,show="headings")
+heads=["ID","Hersteller","Farbe","Material","Ausführung","Rollen","g/Rolle","Restgewicht","€/Rolle","Lagerplatz","Notizen"]
+for c,h in zip(cols,heads): tree.heading(c,text=h)
+tree.column("id",width=0,stretch=False)
+for c,w in zip(cols[1:],[150,120,90,120,65,75,90,75,95,170]): tree.column(c,width=w)
+ys=ttk.Scrollbar(tc,orient="vertical",command=tree.yview); tree.configure(yscrollcommand=ys.set)
+tree.pack(side="left",fill="both",expand=True); ys.pack(side="right",fill="y"); tree.bind("<<TreeviewSelect>>",pick)
+refresh(); root.mainloop()
