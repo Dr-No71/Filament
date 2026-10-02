@@ -176,7 +176,7 @@ def printer_refresh():
     for r in rows:
         if q and q not in " ".join(map(str,r[1:])).lower(): continue
         old=printer_status_cache.get(str(r[0]),("● Noch nicht geprüft","unknown"))
-        printer_tree.insert("","end",values=r+(old[0],),tags=(old[1],))
+        printer_tree.insert("","end",values=r+(printer_color_summary(r[0]),old[0]),tags=(old[1],))
 
 def refresh_printer_manufacturers():
     if "printer_manufacturer_box" not in globals(): return
@@ -185,6 +185,115 @@ def refresh_printer_manufacturers():
                                         WHERE TRIM(COALESCE(hersteller,''))<>''
                                         ORDER BY hersteller COLLATE NOCASE""").fetchall()]
     printer_manufacturer_box["values"]=vals
+
+
+def ensure_printer_slots(pid, count):
+    count=min(10,max(1,int(count or 1)))
+    with con() as c:
+        existing={r[0] for r in c.execute("SELECT slot_nr FROM drucker_slots WHERE drucker_id=?",(pid,)).fetchall()}
+        for n in range(1,count+1):
+            if n not in existing:
+                c.execute("INSERT OR IGNORE INTO drucker_slots(drucker_id,slot_nr,filament_id) VALUES(?,?,NULL)",(pid,n))
+        c.execute("DELETE FROM drucker_slots WHERE drucker_id=? AND slot_nr>?",(pid,count))
+
+def refresh_slot_filament_choices():
+    if "slot_filament_box" not in globals(): return
+    with con() as c:
+        rows=c.execute("""SELECT id,hersteller,farbe,material,ausfuehrung FROM filament
+                          ORDER BY hersteller,farbe,material,ausfuehrung""").fetchall()
+    global slot_filament_map
+    slot_filament_map={}
+    vals=["— frei —"]
+    for r in rows:
+        label=f"{r[1]} | {r[2]} | {r[3]} | {r[4]}"
+        vals.append(label); slot_filament_map[label]=r[0]
+    slot_filament_box["values"]=vals
+
+def printer_color_summary(pid):
+    with con() as c:
+        rows=c.execute("""SELECT COALESCE(f.farbe,'') FROM drucker_slots s
+                          LEFT JOIN filament f ON f.id=s.filament_id
+                          WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
+    vals=[r[0] for r in rows if r[0]]
+    return " | ".join(vals)
+
+def refresh_color_boxes():
+    if "color_boxes_frame" not in globals(): return
+    for w in color_boxes_frame.winfo_children(): w.destroy()
+    pid=int(printer_selected.get() or 0)
+    if not pid:
+        tk.Label(color_boxes_frame,text="Drucker auswählen",bg=WHITE,fg=GREY).pack(side="left")
+        return
+    with con() as c:
+        rows=c.execute("""SELECT s.slot_nr,COALESCE(f.farbe,'') FROM drucker_slots s
+                          LEFT JOIN filament f ON f.id=s.filament_id
+                          WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
+    # Common German/English filament color names -> display color.
+    cmap={"schwarz":"#111111","black":"#111111","weiß":"#FFFFFF","weiss":"#FFFFFF","white":"#FFFFFF",
+          "rot":"#E53935","red":"#E53935","blau":"#1E88E5","blue":"#1E88E5","grün":"#43A047","green":"#43A047",
+          "gelb":"#FDD835","yellow":"#FDD835","orange":"#FB8C00","grau":"#9E9E9E","grey":"#9E9E9E","gray":"#9E9E9E",
+          "silber":"#C0C0C0","silver":"#C0C0C0","gold":"#D4AF37","braun":"#795548","brown":"#795548",
+          "lila":"#8E24AA","violett":"#8E24AA","purple":"#8E24AA","pink":"#EC407A","rosa":"#EC407A",
+          "türkis":"#26A69A","turkis":"#26A69A","cyan":"#00ACC1","beige":"#D7CCC8"}
+    byslot={int(n):f for n,f in rows}
+    count=min(10,max(1,int(PV["filamentplaetze"].get() or 1)))
+    for n in range(1,count+1):
+        farbe=byslot.get(n,"")
+        bg=cmap.get(farbe.strip().lower(),"#E5E7EB" if not farbe else "#BDBDBD")
+        box=tk.Label(color_boxes_frame,text=str(n),bg=bg,
+                     fg="#FFFFFF" if bg in ("#111111","#E53935","#1E88E5","#43A047","#795548","#8E24AA") else "#111111",
+                     width=3,height=1,relief="solid",bd=1,font=("Segoe UI",9,"bold"))
+        box.pack(side="left",padx=2)
+        if farbe:
+            try:
+                box.bind("<Enter>",lambda e,t=f"Slot {n}: {farbe}": color_hint.set(t))
+                box.bind("<Leave>",lambda e: color_hint.set(""))
+            except: pass
+
+def slot_refresh():
+    if "slot_tree" not in globals(): return
+    for x in slot_tree.get_children(): slot_tree.delete(x)
+    pid=int(printer_selected.get() or 0)
+    if not pid: return
+    with con() as c:
+        rows=c.execute("""SELECT s.slot_nr,f.hersteller,f.farbe,f.material,f.ausfuehrung
+                          FROM drucker_slots s LEFT JOIN filament f ON f.id=s.filament_id
+                          WHERE s.drucker_id=? ORDER BY s.slot_nr""",(pid,)).fetchall()
+    for r in rows:
+        slot_tree.insert("", "end", values=(r[0],r[1] or "",r[2] or "",r[3] or "",r[4] or "",
+                                            "belegt" if r[1] else "frei"))
+
+def slot_select(_=None):
+    sel=slot_tree.selection()
+    if not sel: return
+    vals=slot_tree.item(sel[0],"values")
+    slot_no_var.set(int(vals[0]))
+    if vals[1]:
+        label=f"{vals[1]} | {vals[2]} | {vals[3]} | {vals[4]}"
+        slot_filament_var.set(label)
+    else:
+        slot_filament_var.set("— frei —")
+
+def slot_save():
+    if not printer_selected.get():
+        messagebox.showinfo("Filament-Slots","Bitte zuerst einen Drucker auswählen.")
+        return
+    n=int(slot_no_var.get() or 1)
+    label=slot_filament_var.get()
+    fid=slot_filament_map.get(label)
+    with con() as c:
+        c.execute("""INSERT INTO drucker_slots(drucker_id,slot_nr,filament_id) VALUES(?,?,?)
+                     ON CONFLICT(drucker_id,slot_nr) DO UPDATE SET filament_id=excluded.filament_id""",
+                  (int(printer_selected.get()),n,fid))
+    slot_refresh(); printer_refresh(); refresh_color_boxes()
+
+def slot_clear():
+    if not printer_selected.get(): return
+    n=int(slot_no_var.get() or 1)
+    with con() as c:
+        c.execute("UPDATE drucker_slots SET filament_id=NULL WHERE drucker_id=? AND slot_nr=?",
+                  (int(printer_selected.get()),n))
+    slot_filament_var.set("— frei —"); slot_refresh(); printer_refresh(); refresh_color_boxes()
 
 def printer_clear():
     printer_selected.set("")
@@ -197,14 +306,20 @@ def printer_pick(_=None):
     r=printer_tree.item(sel[0],"values")
     printer_selected.set(r[0])
     for k,v in zip(["druckernummer","name","hersteller","modell","ip","standort","notizen"],r[1:8]): PV[k].set(v)
+    with con() as c:
+        rr=c.execute("SELECT COALESCE(filamentplaetze,1) FROM drucker WHERE id=?",(r[0],)).fetchone()
+    PV["filamentplaetze"].set(rr[0] if rr else 1)
+    ensure_printer_slots(r[0],PV["filamentplaetze"].get())
+    refresh_slot_filament_choices(); slot_refresh()
+
 
 def printer_save():
-    x={k:v.get().strip() for k,v in PV.items()}
+    x={k:(v.get().strip() if k!="filamentplaetze" else min(10,max(1,int(v.get() or 1)))) for k,v in PV.items()}
     if not x["name"]:
         messagebox.showwarning("Drucker","Bitte einen Druckernamen eingeben."); return
     if not x["druckernummer"]:
         x["druckernummer"]=next_printer_number()
-    d=(x["druckernummer"].upper(),x["name"],x["hersteller"],x["modell"],x["ip"],x["standort"],x["notizen"])
+    d=(x["druckernummer"].upper(),x["name"],x["hersteller"],x["modell"],x["ip"],x["standort"],x["notizen"],x["filamentplaetze"])
     try:
         with con() as c:
             exists=c.execute("SELECT id FROM drucker WHERE UPPER(TRIM(druckernummer))=? AND id<>?",
@@ -212,14 +327,18 @@ def printer_save():
             if exists:
                 messagebox.showwarning("Drucker","Diese Druckernummer ist bereits vergeben."); return
             if printer_selected.get():
-                c.execute("""UPDATE drucker SET druckernummer=?,name=?,hersteller=?,modell=?,ip=?,standort=?,notizen=?
-                             WHERE id=?""",d+(printer_selected.get(),))
+                pid=int(printer_selected.get())
+                c.execute("""UPDATE drucker SET druckernummer=?,name=?,hersteller=?,modell=?,ip=?,standort=?,notizen=?,filamentplaetze=?
+                             WHERE id=?""",d+(pid,))
             else:
-                c.execute("""INSERT INTO drucker(druckernummer,name,hersteller,modell,ip,standort,notizen)
-                             VALUES(?,?,?,?,?,?,?)""",d)
+                cur=c.execute("""INSERT INTO drucker(druckernummer,name,hersteller,modell,ip,standort,notizen,filamentplaetze)
+                                 VALUES(?,?,?,?,?,?,?,?)""",d)
+                pid=cur.lastrowid
+        ensure_printer_slots(pid,x["filamentplaetze"])
     except Exception as e:
         messagebox.showerror("Drucker",f"Drucker konnte nicht gespeichert werden:\n{e}"); return
-    printer_clear(); refresh_printer_manufacturers(); printer_refresh()
+    printer_clear(); refresh_printer_manufacturers(); printer_refresh(); refresh_slot_filament_choices(); slot_refresh()
+
 
 def printer_delete():
     if not printer_selected.get():
@@ -275,7 +394,7 @@ def schedule_printer_check():
 
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.3"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5.5"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -381,12 +500,14 @@ pcard=tk.Frame(printer_page,bg=WHITE,highlightbackground="#D9DDE2",highlightthic
 pcard.pack(fill="x",padx=8,pady=(8,0))
 tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=7,sticky="w",padx=14,pady=12)
 pfields=[("Druckernummer","druckernummer"),("Druckername","name"),("Hersteller","hersteller"),("Modell","modell"),
-         ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
+         ("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen"),("Filamentplätze","filamentplaetze")]
 pwidgets={}
 for i,(lab,k) in enumerate(pfields):
     tk.Label(pcard,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=1,column=i,sticky="w",padx=10)
     if k=="hersteller":
         w=ttk.Combobox(pcard,textvariable=PV[k])
+    elif k=="filamentplaetze":
+        w=tk.Spinbox(pcard,from_=1,to=10,textvariable=PV[k],width=8)
     else:
         w=ttk.Entry(pcard,textvariable=PV[k])
     w.grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
@@ -408,12 +529,12 @@ tk.Label(pbar,text="Online-Status automatisch alle 60 Sekunden. Filament-Zuordnu
 printer_search.trace_add("write",lambda *_: printer_refresh())
 
 pbox=tk.Frame(printer_page,bg=WHITE); pbox.pack(fill="both",expand=True,padx=8,pady=(0,8))
-pcols=("id","druckernummer","name","hersteller","modell","ip","standort","notizen","status")
-pheads=["ID","Nr.","Druckername","Hersteller","Modell","IP-Adresse","Standort","Notizen","Status"]
+pcols=("id","druckernummer","name","hersteller","modell","ip","standort","notizen","farben","status")
+pheads=["ID","Nr.","Druckername","Hersteller","Modell","IP-Adresse","Standort","Notizen","Farben geladen","Status"]
 printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings")
 for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
 printer_tree.column("id",width=0,stretch=False)
-for c,w in zip(pcols[1:],[70,150,120,140,135,135,190,95]): printer_tree.column(c,width=w)
+for c,w in zip(pcols[1:],[60,125,105,115,120,115,135,220,95]): printer_tree.column(c,width=w)
 printer_tree.tag_configure("online",background="#D9F2DD")
 printer_tree.tag_configure("offline",background="#FFD0D0")
 printer_tree.tag_configure("unknown",background="#FFF2B2")
@@ -421,7 +542,37 @@ pys=ttk.Scrollbar(pbox,orient="vertical",command=printer_tree.yview); printer_tr
 printer_tree.pack(side="left",fill="both",expand=True); pys.pack(side="right",fill="y")
 printer_tree.bind("<<TreeviewSelect>>",printer_pick)
 
-clear(); refresh_lists(); refresh(); printer_clear(); refresh_printer_manufacturers(); printer_refresh()
+
+# Filament-Slots pro Drucker
+slotbox=tk.LabelFrame(printer_tab,text=" Filamentbelegung des ausgewählten Druckers ",bg=WHITE,fg=NAVY,
+                      font=("Segoe UI",11,"bold"),padx=10,pady=8)
+slotbox.pack(fill="x",padx=12,pady=(0,8))
+slot_no_var=tk.IntVar(value=1)
+slot_filament_var=tk.StringVar(value="— frei —")
+tk.Label(slotbox,text="Slot",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=0,column=0,sticky="w")
+tk.Spinbox(slotbox,from_=1,to=10,textvariable=slot_no_var,width=6).grid(row=1,column=0,padx=(0,10),sticky="w")
+tk.Label(slotbox,text="Filament aus Lager",bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=0,column=1,sticky="w")
+slot_filament_box=ttk.Combobox(slotbox,textvariable=slot_filament_var,state="readonly",width=52)
+slot_filament_box.grid(row=1,column=1,padx=(0,10),sticky="w")
+tk.Button(slotbox,text="Filament zuordnen",command=slot_save,bg=NAVY,fg="white",font=("Segoe UI",9,"bold"),bd=0,padx=12,pady=7).grid(row=1,column=2,padx=4)
+tk.Button(slotbox,text="Slot leeren",command=slot_clear,bg=GRAY,fg="white",font=("Segoe UI",9,"bold"),bd=0,padx=12,pady=7).grid(row=1,column=3,padx=4)
+
+slotcols=("slot","hersteller","farbe","material","ausfuehrung","status")
+color_hint=tk.StringVar(value="")
+tk.Label(slotbox,text="Geladene Farben",bg=WHITE,fg=NAVY,font=("Segoe UI",9,"bold")).grid(row=2,column=0,sticky="w",pady=(10,4))
+color_boxes_frame=tk.Frame(slotbox,bg=WHITE)
+color_boxes_frame.grid(row=2,column=1,columnspan=2,sticky="w",pady=(10,4))
+tk.Label(slotbox,textvariable=color_hint,bg=WHITE,fg=GREY,font=("Segoe UI",9)).grid(row=2,column=3,sticky="w",pady=(10,4))
+
+slot_tree=ttk.Treeview(slotbox,columns=slotcols,show="headings",height=5)
+for c,t,w in [("slot","Slot",55),("hersteller","Hersteller",160),("farbe","Farbe",150),
+              ("material","Material",100),("ausfuehrung","Ausführung",120),("status","Status",90)]:
+    slot_tree.heading(c,text=t); slot_tree.column(c,width=w,anchor="center" if c in ("slot","status") else "w")
+slot_tree.grid(row=3,column=0,columnspan=4,sticky="ew",pady=(8,0))
+slot_tree.bind("<<TreeviewSelect>>",slot_select)
+slotbox.grid_columnconfigure(1,weight=1)
+
+clear(); refresh_lists(); refresh(); printer_clear(); refresh_printer_manufacturers(); printer_refresh(); refresh_slot_filament_choices(); refresh_color_boxes()
 root.after(1200,schedule_printer_check)
 root.mainloop()
 
