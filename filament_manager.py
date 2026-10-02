@@ -199,7 +199,7 @@ def ensure_printer_slots(pid, count):
 def refresh_slot_filament_choices():
     if "slot_filament_box" not in globals(): return
     with con() as c:
-        rows=c.execute("""SELECT id,hersteller,farbe,material,ausfuehrung FROM filament
+        rows=c.execute("""SELECT id,hersteller,farbe,material,ausfuehrung FROM filamente
                           ORDER BY hersteller,farbe,material,ausfuehrung""").fetchall()
     global slot_filament_map
     slot_filament_map={}
