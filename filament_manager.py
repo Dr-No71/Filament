@@ -310,8 +310,8 @@ def printer_pick(_=None):
     for k,v in zip(["druckernummer","name","hersteller","modell","ip","standort","notizen"],r[1:8]): PV[k].set(v)
     with con() as c:
         rr=c.execute("SELECT COALESCE(filamentplaetze,1) FROM drucker WHERE id=?",(r[0],)).fetchone()
-    PV["filamentplaetze"].set(rr[0] if rr else 1)
-    ensure_printer_slots(r[0],PV["filamentplaetze"].get())
+    PV.get("filamentplaetze", tk.StringVar()).set(rr[0] if rr else 1)
+    ensure_printer_slots(r[0],PV.get("filamentplaetze", tk.StringVar(value="1")).get())
     refresh_slot_filament_choices(); slot_refresh()
 
 
