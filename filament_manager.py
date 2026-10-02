@@ -492,7 +492,8 @@ tree.bind("<<TreeviewSelect>>",pick)
 
 
 printer_selected=tk.StringVar()
-PV={k:tk.StringVar() for k in ["druckernummer","name","hersteller","modell","ip","standort","notizen"]}
+PV={k:tk.StringVar() for k in ["druckernummer","name","hersteller","modell","ip","standort","notizen","filamentplaetze"]}
+PV["filamentplaetze"].set("1")
 printer_status_cache={}
 printer_checking=tk.BooleanVar(value=False)
 printer_status_text=tk.StringVar(value="Noch nicht geprüft")
