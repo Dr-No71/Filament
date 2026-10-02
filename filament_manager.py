@@ -34,6 +34,13 @@ def init():
           ("mindestbestand","ALTER TABLE filamente ADD COLUMN mindestbestand INTEGER NOT NULL DEFAULT 2")]
         for name,sql in additions:
             if name not in existing: c.execute(sql)
+        c.execute("""CREATE TABLE IF NOT EXISTS drucker(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          modell TEXT DEFAULT '',
+          ip TEXT DEFAULT '',
+          standort TEXT DEFAULT '',
+          notizen TEXT DEFAULT '')""")
 
 def num(s,label):
     try:
@@ -132,10 +139,52 @@ def refresh(*_):
         sums=c.execute("SELECT COALESCE(SUM(rollen),0),COALESCE(SUM(rollen*gewicht),0),COALESCE(SUM(rollen*preis),0) FROM filamente").fetchone()
         all_low=c.execute("SELECT COUNT(*) FROM filamente WHERE rollen<=mindestbestand").fetchone()[0]
     status.set(f"{sums[0]} Rollen   |   {sums[1]/1000:.1f} kg   |   Lagerwert {sums[2]:.2f} €")
-    warning_status.set(f"⚠ {all_low} Filamente nachbestellen" if all_low else "✓ Bestand ausreichend")
+    warning_status.set("⚠ Kein Filamentbestand" if sums[0]==0 and not rows else (f"⚠ {all_low} Filamente nachbestellen" if all_low else "✓ Bestand ausreichend"))
+
+
+def printer_refresh():
+    if "printer_tree" not in globals(): return
+    for i in printer_tree.get_children(): printer_tree.delete(i)
+    q=printer_search.get().lower().strip()
+    with con() as c:
+        rows=c.execute("SELECT id,name,modell,ip,standort,notizen FROM drucker ORDER BY name COLLATE NOCASE").fetchall()
+    for r in rows:
+        if q and q not in " ".join(map(str,r[1:])).lower(): continue
+        printer_tree.insert("","end",values=r)
+
+def printer_clear():
+    printer_selected.set("")
+    for v in PV.values(): v.set("")
+
+def printer_pick(_=None):
+    sel=printer_tree.selection()
+    if not sel:return
+    r=printer_tree.item(sel[0],"values")
+    printer_selected.set(r[0])
+    for k,v in zip(["name","modell","ip","standort","notizen"],r[1:]): PV[k].set(v)
+
+def printer_save():
+    x={k:v.get().strip() for k,v in PV.items()}
+    if not x["name"]:
+        messagebox.showwarning("Drucker","Bitte einen Druckernamen eingeben."); return
+    d=(x["name"],x["modell"],x["ip"],x["standort"],x["notizen"])
+    with con() as c:
+        if printer_selected.get():
+            c.execute("UPDATE drucker SET name=?,modell=?,ip=?,standort=?,notizen=? WHERE id=?",d+(printer_selected.get(),))
+        else:
+            c.execute("INSERT INTO drucker(name,modell,ip,standort,notizen) VALUES(?,?,?,?,?)",d)
+    printer_clear(); printer_refresh()
+
+def printer_delete():
+    if not printer_selected.get():
+        messagebox.showinfo("Drucker","Bitte zuerst einen Drucker auswählen."); return
+    if messagebox.askyesno("Drucker löschen","Ausgewählten Drucker wirklich löschen?"):
+        with con() as c: c.execute("DELETE FROM drucker WHERE id=?",(printer_selected.get(),))
+        printer_clear(); printer_refresh()
+
 
 init()
-root=tk.Tk(); root.title("Juno modellbau – Filamentlager V4"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
+root=tk.Tk(); root.title("Juno modellbau – Lager & Drucker V5"); root.geometry("1420x820"); root.minsize(1100,680); root.configure(bg=CREAM)
 try: root.iconbitmap(res("assets/juno.ico"))
 except: pass
 
@@ -161,8 +210,10 @@ stats=tk.Frame(header,bg=WHITE); stats.pack(side="right",padx=30)
 tk.Label(stats,textvariable=status,bg=WHITE,fg=NAVY,font=("Segoe UI",12,"bold")).pack(anchor="e")
 tk.Label(stats,textvariable=warning_status,bg=WHITE,fg=RED,font=("Segoe UI",11,"bold")).pack(anchor="e",pady=(5,0))
 
-main=tk.Frame(root,bg=CREAM); main.pack(fill="both",expand=True,padx=22,pady=16)
-card=tk.Frame(main,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1); card.pack(fill="x")
+notebook=ttk.Notebook(root); notebook.pack(fill="both",expand=True,padx=14,pady=(8,14))
+main=tk.Frame(notebook,bg=CREAM); notebook.add(main,text="  Filamentlager  ")
+printer_page=tk.Frame(notebook,bg=CREAM); notebook.add(printer_page,text="  Drucker  ")
+card=tk.Frame(main,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1); card.pack(fill="x",padx=8,pady=(8,0))
 tk.Label(card,text="Filament-Stammdaten",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=5,sticky="w",padx=14,pady=12)
 
 fields=[("Hersteller","hersteller"),("Farbe","farbe"),("Material","material"),("Ausführung","ausfuehrung"),("Anzahl Rollen","rollen"),
@@ -191,7 +242,7 @@ B("+ Rollen einlagern",lambda:stock_change(1),NAVY).pack(side="left",padx=4)
 B("− Rollen entnehmen",lambda:stock_change(-1),RED).pack(side="left",padx=4)
 B("Löschen",delete,GREY).pack(side="left",padx=4)
 
-bar=tk.Frame(main,bg=CREAM); bar.pack(fill="x",pady=12)
+bar=tk.Frame(main,bg=CREAM); bar.pack(fill="x",padx=8,pady=12)
 tk.Label(bar,text="Suche",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left")
 ttk.Entry(bar,textvariable=search,width=22).pack(side="left",padx=6)
 
@@ -215,7 +266,7 @@ ffarbe.trace_add("write",refresh)
 fmat.trace_add("write",refresh)
 fver.trace_add("write",refresh)
 
-box=tk.Frame(main,bg=WHITE); box.pack(fill="both",expand=True)
+box=tk.Frame(main,bg=WHITE); box.pack(fill="both",expand=True,padx=8,pady=(0,8))
 cols=("id","hersteller","farbe","material","ausfuehrung","rollen","gewicht","preis","lagerplatz","notizen","mindestbestand","gesamtkg","gesamtwert")
 heads=["ID","Hersteller","Farbe","Material","Ausführung","Rollen","g/Rolle","€/Rolle","Lagerplatz","Notizen","Minimum","Gesamt kg","Gesamt €"]
 tree=ttk.Treeview(box,columns=cols,show="headings")
@@ -227,4 +278,39 @@ ys=ttk.Scrollbar(box,orient="vertical",command=tree.yview); tree.configure(yscro
 tree.pack(side="left",fill="both",expand=True); ys.pack(side="right",fill="y")
 tree.bind("<<TreeviewSelect>>",pick)
 
-clear(); refresh_lists(); refresh(); root.mainloop()
+
+printer_selected=tk.StringVar()
+PV={k:tk.StringVar() for k in ["name","modell","ip","standort","notizen"]}
+printer_search=tk.StringVar()
+
+pcard=tk.Frame(printer_page,bg=WHITE,highlightbackground="#D9DDE2",highlightthickness=1)
+pcard.pack(fill="x",padx=8,pady=(8,0))
+tk.Label(pcard,text="Druckerverwaltung",bg=WHITE,fg=NAVY,font=("Segoe UI",14,"bold")).grid(row=0,column=0,columnspan=5,sticky="w",padx=14,pady=12)
+pfields=[("Druckername / Nummer","name"),("Modell","modell"),("IP-Adresse","ip"),("Standort","standort"),("Notizen","notizen")]
+for i,(lab,k) in enumerate(pfields):
+    tk.Label(pcard,text=lab,bg=WHITE,fg=TEXT,font=("Segoe UI",9,"bold")).grid(row=1,column=i,sticky="w",padx=10)
+    ttk.Entry(pcard,textvariable=PV[k]).grid(row=2,column=i,sticky="ew",padx=10,pady=(2,10),ipady=3)
+    pcard.grid_columnconfigure(i,weight=1)
+pbuttons=tk.Frame(pcard,bg=WHITE); pbuttons.grid(row=3,column=0,columnspan=5,sticky="w",padx=10,pady=(0,14))
+tk.Button(pbuttons,text="Drucker speichern",command=printer_save,bg=RED,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+tk.Button(pbuttons,text="Neuer Drucker",command=printer_clear,bg=NAVY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+tk.Button(pbuttons,text="Drucker löschen",command=printer_delete,bg=GREY,fg=WHITE,relief="flat",font=("Segoe UI",10,"bold"),padx=15,pady=8).pack(side="left",padx=4)
+
+pbar=tk.Frame(printer_page,bg=CREAM); pbar.pack(fill="x",padx=8,pady=12)
+tk.Label(pbar,text="Drucker suchen",bg=CREAM,fg=NAVY,font=("Segoe UI",10,"bold")).pack(side="left")
+ttk.Entry(pbar,textvariable=printer_search,width=32).pack(side="left",padx=8)
+printer_search.trace_add("write",lambda *_: printer_refresh())
+
+pbox=tk.Frame(printer_page,bg=WHITE); pbox.pack(fill="both",expand=True,padx=8,pady=(0,8))
+pcols=("id","name","modell","ip","standort","notizen")
+pheads=["ID","Druckername / Nummer","Modell","IP-Adresse","Standort","Notizen"]
+printer_tree=ttk.Treeview(pbox,columns=pcols,show="headings")
+for c,h in zip(pcols,pheads): printer_tree.heading(c,text=h)
+printer_tree.column("id",width=0,stretch=False)
+for c,w in zip(pcols[1:],[220,220,160,180,300]): printer_tree.column(c,width=w)
+pys=ttk.Scrollbar(pbox,orient="vertical",command=printer_tree.yview); printer_tree.configure(yscrollcommand=pys.set)
+printer_tree.pack(side="left",fill="both",expand=True); pys.pack(side="right",fill="y")
+printer_tree.bind("<<TreeviewSelect>>",printer_pick)
+
+clear(); refresh_lists(); refresh(); printer_clear(); printer_refresh(); root.mainloop()
+
